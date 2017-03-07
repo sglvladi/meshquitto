@@ -98,7 +98,7 @@ String macToStr(const uint8_t* mac)
 
 
 /************************************************************************/
-/* Reads from DS18B20 sensor interfase given one-wire                   */
+/* Reads and returns the device MAC adress as a String                  */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String getMac()                                    
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
