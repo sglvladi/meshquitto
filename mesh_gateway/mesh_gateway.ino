@@ -1,14 +1,12 @@
+/*=================================================================================== */
+/* meshquitto/mesh_gateway.ino                                                        */
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+/* Example implementation of a meshquitto mesh gateway.                               */
+/*                                                                                    */
+/* Created by Lyudmil Vladimirov, Feb 2017                                            */
+/* More info: https://github.com/sglvladi/meshquitto                                  */
+/* ================================================================================== */
 
-//************************************************************
-// this is a simple example that uses the easyMesh library
-//
-// 1. blinks led once for every node on the mesh
-// 2. blink cycle repeats every BLINK_PERIOD
-// 3. sends a silly message to every node on the mesh at a random time betweew 1 and 5 seconds
-// 4. prints anything it recieves to Serial.print
-// 
-//
-//************************************************************
 #include <SoftwareSerial.h>
 #include <painlessMesh.h>
 #include <ArduinoJson.h>
@@ -17,74 +15,85 @@
 #include <AES.h>
 #include <Crc16.h>
 
-
-// some gpio pin that is connected to an LED... 
-// on my rig, this is 5, change to the right number of your LED.
-#define   LED             D1      // GPIO number of connected LED
-
-#define   BLINK_PERIOD    1000000 // microseconds until cycle repeat
-#define   BLINK_DURATION  100000  // microseconds LED is on for
-
+// Mesh network details
 #define   MESH_SSID       "whateverYouLike"
 #define   MESH_PASSWORD   "somethingSneaky"
 #define   MESH_ENCRYPT    "sampleEncryptKey"
 #define   MESH_PORT       5555
-#define   QUEUE_SIZE      30
+#define   MESH_KEEP_ALIVE 5000  // (millis)
 
-#define TX D1
-#define RX D2
-#define TX_IRQ D4
-#define RX_IRQ D5
+// Message buffer size
+#define   BUFFER_SIZE     30
+
+// Definition of TX/RX and TX/RX_IRQ (interrupt) pins
+#define TX                D1
+#define RX                D2
+#define TX_IRQ            D4
+#define RX_IRQ            D5
 
 //#define TX_FSM_ABORT 0
 //#define TX_FSM_READY 1
 //#define TX_FSM_ACK   2
 
+// Mesh intantiation
 painlessMesh  mesh;
-bool calc_delay = false;
-SimpleList<uint32_t> nodes;
-SimpleList<uint32_t> lostConnections;
-SimpleList<unsigned long> lostConnTimeouts;
-SimpleList<String> wifiMessageBuffer;
-SimpleList<String> meshMessageBuffer;
-//String TX_FSM_STATE = TX_FSM_READY;
+
+// Storage containers and buffers
+SimpleList<uint32_t> nodes;                   // Stores list of all nodes
+SimpleList<uint32_t> lostConnections;         // Stores list of all lost connections
+SimpleList<unsigned long> lostConnTimeouts;   // Stores list of all lost connection timeouts (keep alive = 5 sec)
+SimpleList<String> mqttMessageBuffer;         // Stores list of all messages queued to be forwarded to MQTT gateway
+SimpleList<String> meshMessageBuffer;         // Stores list of all messages queued to be sent to Mesh network
+
 // {NodeId => MAC} Map 
 CreateHashMap(macAddressMap, int, String, 30);
-uint32_t sendMessageTime = 0;
-String key = "0123456789010123";
-unsigned long long int my_iv = 36753562;
-int bits = 256;
 
-Crc16 crc;
+// AES Encryption parameters
+const String                  AES_KEY   = "0123456789010123";
+const unsigned long long int  AES_IV    = 36753562;
+const int                     AES_BITS  = 256;
 
+// Timestamp to store last time a message was sent to Mesh
 unsigned long lastMsg = millis();
 
 SoftwareSerial swSer(RX, TX, false, 255);
 
-//Ticker RX_Interrupt_Ticker;
-
-bool _sending = false;
+// Global flags used for control
+bool _sending   = false;
 bool _receiving = false;
 
-String jsonMqttMessage(String topic, String payload){
-  StaticJsonBuffer<500> jsonBuffer;
-  JsonObject& rootFS2 = jsonBuffer.createObject();
-  rootFS2["topic"] = topic;
-  rootFS2["payload"] = payload;
-  String json_msg;
-  rootFS2.printTo(json_msg);
-  return json_msg;
-}
+//Ticker RX_Interrupt_Ticker;
+//void RX_check( void ){
+//  if(digitalRead(RX_IRQ)==LOW){
+    //RX_Interrupt_Ticker.detach();
+//    receiveFromWiFi();
+//  }
+//}
 
-void printHeap(){
+/************************************************************************/
+/* Prints available heap memory to Serial                               */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+void printHeap(){                                                       
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
   Serial.print("Free Heap: "); Serial.println(ESP.getFreeHeap());
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Prints the number of queued messages to Serial                       */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void printQueueSizes(){
-  Serial.print("WIFI queue: "); Serial.println(wifiMessageBuffer.size());
+  Serial.print("MQTT queue: "); Serial.println(mqttMessageBuffer.size());
   Serial.print("Mesh queue: "); Serial.println(meshMessageBuffer.size());
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Computes CRC16 of given data, then appends it to data and returns    */
+/* the resulting string                                                 */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String getCRCString(String data){
   Crc16 crc;
   byte * data_buf = (unsigned char*)data.c_str();
@@ -97,7 +106,14 @@ String getCRCString(String data){
   data += crc_value;
   return data;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Reads a string of data with it's CRC16 appended to the end, then     */
+/* computes a new CRC16 based on the raw data and returns true if       */
+/* the two CRC16 values match.                                          */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 bool checkCRC(String dataPlusCRC ){
   Crc16 crc;
   crc.clearCrc();
@@ -112,17 +128,37 @@ bool checkCRC(String dataPlusCRC ){
   }
   return false;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Reads topic and payload of MQTT message and formats it as JSON string */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+String jsonMqttMessage(String topic, String payload){
+  StaticJsonBuffer<500> jsonBuffer;
+  JsonObject& rootFS2 = jsonBuffer.createObject();
+  rootFS2["topic"] = topic;
+  rootFS2["payload"] = payload;
+  String json_msg;
+  rootFS2.printTo(json_msg);
+  return json_msg;
+}
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+
+
+/*************************************************************************/
+/* Performs AES encryption on a given text. Key *must* be 16 bytes.      */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String AES_encrypt(String plain, String key) {
   /* Local AES instance (uncomment to recreate problem) */
   AES aes ; 
-  aes.set_IV(my_iv);
+  aes.set_IV(AES_IV);
   byte * plain_buf = (unsigned char*)plain.c_str();
   byte * key_buf = (unsigned char*)key.c_str();
   // add padding where appropriate
   int cipher_length = (plain.length()+1 < 16) ? 16 : (plain.length()+1) + (16 - (plain.length()+1) % 16);
   byte cipher_buf[cipher_length];
-  aes.do_aes_encrypt(plain_buf, plain.length() + 1, cipher_buf, key_buf, bits);
+  aes.do_aes_encrypt(plain_buf, plain.length() + 1, cipher_buf, key_buf, AES_BITS);
   String cipher = aes.printToHEXString(cipher_buf, cipher_length);
   //aes.printArray(cipher_buf, false);
   uint16_t plain_size = plain.length();
@@ -141,13 +177,18 @@ String AES_encrypt(String plain, String key) {
   //Serial.println(cipher);
   return cipher;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Performs AES decryption on a given cipher. Key *must* be 16 bytes.    */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String AES_decrypt(String cipher, String key) {
   //printHeap();
   /* Local AES instance (uncomment to recreate problem) */
   AES aes ; 
   //Serial.println(cipher);
-  aes.set_IV(my_iv);
+  aes.set_IV(AES_IV);
   byte cipher_buf[cipher.length()/2-2];
   int j = 0;
   for(int i=0;i<=cipher.length()-6;i+=2){
@@ -164,14 +205,19 @@ String AES_decrypt(String cipher, String key) {
   byte * key_buf = (unsigned char*)key.c_str();
   int plain_length = cipher.length();
   byte plain_buf[plain_length];
-  aes.do_aes_decrypt(cipher_buf, cipher.length()/2-2, plain_buf, key_buf, bits);
+  aes.do_aes_decrypt(cipher_buf, cipher.length()/2-2, plain_buf, key_buf, AES_BITS);
   String plain = aes.printToString(plain_buf, plain_size);
   //Serial.println(sizeof(plain_buf)/sizeof(plain_buf[0]));
   //Serial.println(plain.length());
   //printHeap();
   return plain;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*****************************************************************************/
+/* Computes and returns the set difference between two SimpleList<uint32_t>  */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 SimpleList<uint32_t> getDifference(SimpleList<uint32_t> arr1, SimpleList<uint32_t> arr2){
   if(arr1.size()==0){
     return arr2;
@@ -204,7 +250,12 @@ SimpleList<uint32_t> getDifference(SimpleList<uint32_t> arr1, SimpleList<uint32_
   
   return diff;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*******************************************************************************/
+/* Computes and returns the set intersection between two SimpleList<uint32_t>  */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 SimpleList<uint32_t> getIntersection(SimpleList<uint32_t> arr1, SimpleList<uint32_t> arr2){
   
   int m = arr1.size();
@@ -225,7 +276,13 @@ SimpleList<uint32_t> getIntersection(SimpleList<uint32_t> arr1, SimpleList<uint3
   }
   return intersect;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/**************************************************************************/
+/* Given two lists, before and after a new scan, computes and returns all */
+/* nodes that have disconnected since the last scan.                      */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 SimpleList<uint32_t> getLostConnections(SimpleList<uint32_t> nodes, SimpleList<uint32_t> old_nodes){
   if(nodes.size()==0){
     return old_nodes;
@@ -243,7 +300,13 @@ SimpleList<uint32_t> getLostConnections(SimpleList<uint32_t> nodes, SimpleList<u
   return lostCons;
   
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/**************************************************************************/
+/* Given two lists, before and after a new scan, computes and returns all */
+/* newly connected nodes.                                                 */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 SimpleList<uint32_t> getNewConnections(SimpleList<uint32_t> nodes, SimpleList<uint32_t> old_nodes){
   
   SimpleList<uint32_t> diff = getDifference(old_nodes, nodes);
@@ -251,7 +314,14 @@ SimpleList<uint32_t> getNewConnections(SimpleList<uint32_t> nodes, SimpleList<ui
   return newCons;
   
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/***********************************************************************/
+/* Checks for any connections which have been lost for longer than the */
+/* keep alive interval, and forwards a "willTopic" to MQTT gateway     */
+/* where applicable.                                                   */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void updateLostConnections(){
   if(lostConnections.size()>0){
     //Serial.println("Updating Lost Connections");
@@ -261,17 +331,17 @@ void updateLostConnections(){
     while (node != lostConnections.end()) 
     {
         //Serial.println(node-nodes.begin());
-        if(millis()-lostConnTimeouts[i]>5000){
+        if(millis()-lostConnTimeouts[i]>MESH_KEEP_ALIVE){
           String topic = String(String(macAddressMap[lostConnections[i]])+"/disconnect");
           String payload = "1";
           String json_msg =jsonMqttMessage(topic, payload);
-          if(wifiMessageBuffer.size()<QUEUE_SIZE){
-            wifiMessageBuffer.push_back(json_msg);
+          if(mqttMessageBuffer.size()<BUFFER_SIZE){
+            mqttMessageBuffer.push_back(json_msg);
           }
           else{
             Serial.print("Dropping messages!!!");
           }
-          sendToWiFi(topic, payload);
+          sendToMQTT(topic, payload);
           macAddressMap.remove(lostConnections[i]);
           lostConnections.remove(i);
           lostConnTimeouts.remove(i);
@@ -283,10 +353,18 @@ void updateLostConnections(){
     //printHeap();
   }
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+/************************************************************************/
+/* Mesh received callback: Receives a message and pushes it to buffer.  */
+/* Also checks to see if the sender's mac is stored in the macAddresMap */
+/* If not, it means this is the first message received from this device */
+/* (after losing connection) and any "willTopic" for that device is     */ 
+/* cleared, by pushing another message to the buffer.                   */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void receivedCallback( uint32_t from, String &msg ) {
   Serial.printf("startHere: Received from %d msg=%s\n", from, msg.c_str());
-  msg = AES_decrypt(msg, key);
+  msg = AES_decrypt(msg, AES_KEY);
   char contentBuffer[500];
   msg.toCharArray(contentBuffer,500);
   StaticJsonBuffer<500> jsonBuffer;
@@ -295,38 +373,38 @@ void receivedCallback( uint32_t from, String &msg ) {
   String payload = rootFS2["payload"].as<String>();
   int endPos = topic.indexOf("/");
   String macAddress = topic.substring(0, endPos);
+
+  // Check if macAddress is already stored else clear
   if(macAddressMap.indexOf(from)==-1){
     macAddressMap[from] = macAddress;
     String topic = String(String(macAddress+"/disconnect"));
     String payload = "0";
     String json_msg =jsonMqttMessage(topic, payload);
-    if(wifiMessageBuffer.size()<QUEUE_SIZE){
-      wifiMessageBuffer.push_back(json_msg);
+    // Push "willTopic" clear meassage to buffer
+    if(mqttMessageBuffer.size()<BUFFER_SIZE){
+      mqttMessageBuffer.push_back(json_msg);
     }
     else{
       Serial.print("Dropping messages!!!");
     }
-    //sendToWiFi(topic, payload);
   }
+
+  // Push received message to buffer.
   String json_msg =jsonMqttMessage(topic, payload);
-  if(wifiMessageBuffer.size()<QUEUE_SIZE){
-    wifiMessageBuffer.push_back(json_msg);
+  if(mqttMessageBuffer.size()<BUFFER_SIZE){
+    mqttMessageBuffer.push_back(json_msg);
   }
   else{
     Serial.print("Dropping messages!!!");
   }
-  //sendToWiFi(topic, payload);
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-void newConnectionCallback(uint32_t nodeId) {
-    int index = lostConnections.indexOf(nodeId);
-    if(index!=-1){
-     lostConnections.remove(index);
-      lostConnTimeouts.remove(index);
-    }
-    Serial.printf("--> startHere: New Connection, nodeId = %u\n", nodeId);
-}
 
+/************************************************************************/
+/* Mesh changed connection Callback: Detection and processing of lost   */
+/* and new connections is done here.
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void changedConnectionCallback() {
  
     Serial.printf("Changed connections %s\n", mesh.subConnectionJson().c_str());
@@ -421,18 +499,30 @@ void changedConnectionCallback() {
     Serial.println();
     // Free up the memory
     //newConns.~SimpleList<uint32_t>();
-    calc_delay = true;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Currently unused painlessMesh callbacks                              */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+void newConnectionCallback(uint32_t nodeId) {
+    Serial.printf("--> startHere: New Connection, nodeId = %u\n", nodeId);
+}
 void nodeTimeAdjustedCallback(int32_t offset) {
     Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(), offset);
 }
-
 void delayReceivedCallback(uint32_t from, int32_t delay) {
     Serial.printf("Delay to node %u is %d us\n", from, delay);
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-void sendToWiFi(String topic, String payload){
+
+/*************************************************************************/
+/* Reads topic and payload of MQTT message, formats it as JSON String    */
+/* and forwards it to MQTT.                                              */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+void sendToMQTT(String topic, String payload){
     _sending = true;
     Serial.print("Forwarding message to WiFi GW");
     DynamicJsonBuffer jsonBufferFS;
@@ -453,12 +543,21 @@ void sendToWiFi(String topic, String payload){
     printQueueSizes();
     Serial.println("==================================> ");
 
-    // Pulse RX_IRQ to tell Mesh GW a message has been written to serial buffer
+    // Pulse RX_IRQ to tell MQTT GW a message has been written to serial buffer
+    digitalWrite(TX_IRQ, LOW);
+    delay(10);
+    digitalWrite(TX_IRQ, HIGH);
+    
     _sending = false;
     printHeap();
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-void sendToWiFi(String json_msg){
+
+/*************************************************************************/
+/* Reads a JSON message and forwards it to MQTT gateway                  */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+void sendToMQTT(String json_msg){
     //_sending = true;
     String crc_msg = getCRCString(json_msg);
     for (int i = 0; i < crc_msg.length(); i++) {
@@ -473,153 +572,126 @@ void sendToWiFi(String json_msg){
     //Serial.print("VALUE: "); Serial.println(payload);
     Serial.println("==================================> ");
 
-    // Pulse RX_IRQ to tell Mesh GW a message has been written to serial buffer
+    // Pulse RX_IRQ to tell MQTT GW a message has been written to serial buffer
     digitalWrite(TX_IRQ, LOW);
     delay(10);
     digitalWrite(TX_IRQ, HIGH);
     _sending = false;
     printHeap();
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-void RX_check( void ){
-  if(digitalRead(RX_IRQ)==LOW){
-    //RX_Interrupt_Ticker.detach();
-    receiveFromWiFi();
-  }
-}
 
+/*************************************************************************/
+/* Function called when MQTT Interrupt (RX_IRQ) is triggered.            */
+/* Checks to see if max buffer limit is reached. If not, the received    */
+/* message is read and pushed to the Mesh buffer. Otherwise, it signals  */
+/* that buffer needs to be emptied and drops any messages until done.    */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void receiveFromWiFi( void ){
-  _receiving = true;
-  Serial.println("WiFi GW interrupt detected");
-  bool received = false;
-  String swMessage;
-  while (swSer.available() > 0) {
-    char swChar = swSer.read();
-    if(swChar!='ÿ'){ // Exclude character ÿ
-      swMessage += swChar;
-    }
-    received = true;
+  if(mqttMessageBuffer.size()>=30){
+    _empty_mqtt_buffer_irq = true;
   }
-  if(received && swMessage!=""){
-    Serial.print("Received message from WiFi gateway: ");
-    swMessage = swMessage.substring(swMessage.indexOf("{"));//replace("ÿ","");
-    Serial.println(swMessage);
-    char contentBuffer[500];
-    swMessage.toCharArray(contentBuffer,500);
-    StaticJsonBuffer<500> jsonBuffer;
-    JsonObject& rootFS2 = jsonBuffer.parseObject(contentBuffer);
-    String topic = rootFS2["topic"].as<String>();
-    int endPos = topic.indexOf("/",2);
-    String macAddress = topic.substring(1, endPos);
-    if(macAddressMap.indexOfValue(macAddress)!=-1){
-      uint32_t nodeId = macAddressMap.keyAt(macAddressMap.indexOfValue(macAddress));
-      String encrypted_msg = AES_encrypt(swMessage, key);
-      Serial.print("Sending to: "); Serial.println(nodeId);
-      mesh.sendSingle(nodeId, encrypted_msg);
+  if(!_empty_mqtt_buffer_irq){
+    _receiving = true;
+    Serial.println("WiFi GW interrupt detected");
+    bool received = false;
+    String swMessage;
+    while (swSer.available() > 0) {
+      char swChar = swSer.read();
+      if(swChar!='ÿ'){ // Exclude character ÿ
+        swMessage += swChar;
+      }
+      received = true;
+    }
+    if(received && swMessage!=""){
+      Serial.print("Received message from WiFi gateway: ");
+      swMessage = swMessage.substring(swMessage.indexOf("{"));//replace("ÿ","");
+      Serial.println(swMessage);
+      char contentBuffer[500];
+      swMessage.toCharArray(contentBuffer,500);
+      StaticJsonBuffer<500> jsonBuffer;
+      JsonObject& rootFS2 = jsonBuffer.parseObject(contentBuffer);
+      String topic = rootFS2["topic"].as<String>();
+      int endPos = topic.indexOf("/",2);
+      String macAddress = topic.substring(1, endPos);
+      if(macAddressMap.indexOfValue(macAddress)!=-1){
+        uint32_t nodeId = macAddressMap.keyAt(macAddressMap.indexOfValue(macAddress));
+        String encrypted_msg = AES_encrypt(swMessage, AES_KEY);
+        Serial.print("Sending to: "); Serial.println(nodeId);
+        mesh.sendSingle(nodeId, encrypted_msg);
+      }
+      else{
+        Serial.println("NOPE...............................................");
+      }
     }
     else{
-      Serial.println("NOPE...............................................");
+      Serial.println("Failed!");
     }
+    _receiving = false;
+    //RX_Interrupt_Ticker.attach(0.1, RX_check);
   }
   else{
-    Serial.println("Failed!");
+    Serial.println("Mesh buffer full!! Dropping data while it's emptying....");
   }
-  _receiving = false;
-  //RX_Interrupt_Ticker.attach(0.1, RX_check);
 }
 
 void setup() {
+  
+  // Start HW and SW Serials
   Serial.begin(115200);
   swSer.begin(38400);
-  Serial.println("\nSoftware serial test started");
-  Serial.println(sizeof(key)/sizeof(key[0]));
-  byte plain[] = "Add NodeAdd NodeAdd NodeAdd NodeAdd Node";
-  Serial.println(sizeof(plain)/sizeof(plain[0]));
+
+  // Print initial debugging info
+  Serial.println("\nMeshquitto Mesh Gateway started!");
   Serial.print("Chip ID: "); Serial.println(ESP.getChipId());
+
+  //mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); // all types on
+  mesh.setDebugMsgTypes( ERROR | STARTUP| CONNECTION );  // set before init() so that you can see startup messages
+  mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
+  mesh.onReceive(&receivedCallback);
+  mesh.onNewConnection(&newConnectionCallback);
+  mesh.onChangedConnections(&changedConnectionCallback);
+  mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
+  mesh.onNodeDelayReceived(&delayReceivedCallback);
+
+  // Set up TX and RX pins and interrupts
   pinMode(TX_IRQ, OUTPUT);
   digitalWrite(TX_IRQ, HIGH);
   pinMode(RX_IRQ, INPUT);
   //RX_Interrupt_Ticker.attach(0.1, RX_check);
   attachInterrupt(RX_IRQ, receiveFromWiFi, FALLING);
-  for (char ch = ' '; ch <= 'z'; ch++) {
-    swSer.write(ch);
-  }
-  swSer.println("");
-
-  pinMode( LED, OUTPUT );
-
-  //mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); // all types on
-  mesh.setDebugMsgTypes( ERROR | STARTUP| CONNECTION );  // set before init() so that you can see startup messages
-
-  mesh.init(MESH_SSID, MESH_PASSWORD, MESH_PORT);
-  Serial.println("Here");
-  mesh.onReceive(&receivedCallback);
-  Serial.println("Here");
-  mesh.onNewConnection(&newConnectionCallback);
-  Serial.println("Here");
-  mesh.onChangedConnections(&changedConnectionCallback);
-  Serial.println("Here");
-  mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
-  Serial.println("Here");
-  mesh.onNodeDelayReceived(&delayReceivedCallback);
-  Serial.println("Here");
-
-  randomSeed( analogRead( A0 ) );  
-
 }
 
 void loop() {
-  //Serial.println("Here");
   mesh.update();
   updateLostConnections();
-  if(!_receiving&&(wifiMessageBuffer.size()>0)){
+  
+  if(!_receiving&&(mqttMessageBuffer.size()>0)){
     // Ensure we only send up to 10 messages a second
+    // This avoids overloading of the MQTT server.
     if(millis()-lastMsg>100){
       //delay(100);
-      String msg = wifiMessageBuffer[0];
-      sendToWiFi(msg);
-      wifiMessageBuffer.pop_front();
+      String msg = mqttMessageBuffer[0];
+      sendToMQTT(msg);
+      mqttMessageBuffer.pop_front();
+      lastMsg = millis();
   //    switch(TX_FSM_STATE){
   //      case(TX_FSM_READY):{
   //        delay(50);
-  //        String msg = wifiMessageBuffer[0];
+  //        String msg = mqttMessageBuffer[0];
   //        TX_FSM_STATE = TX_FSM_ACK;
-  //        sendToWiFi(msg);
+  //        sendToMQTT(msg);
   //        break;
   //      }
   //      case(TX_FSM_ACK):{
   //        if(digitalRead(RTX_INFO)==HIGH){
-  //          wifiMessageBuffer.pop_front();
+  //          mqttMessageBuffer.pop_front();
   //        }
   //        TX_FSM_STATE = TX_FSM_READY;
   //        break;
   //      }
   //    }
-      lastMsg = millis();
     }
   }
-  // run the blinky
-//  bool  onFlag = false;
-//  uint32_t cycleTime = mesh.getNodeTime() % BLINK_PERIOD;
-//  for ( uint8_t i = 0; i < ( mesh.connectionCount() + 1); i++ ) {
-//    uint32_t onTime = BLINK_DURATION * i * 2;    
-//
-//    if ( cycleTime > onTime && cycleTime < onTime + BLINK_DURATION )
-//      onFlag = true;
-//  }
-//  //digitalWrite( LED, onFlag );
-//
-//  // get next random time for send message
-//  if ( sendMessageTime == 0 ) {
-//    sendMessageTime = mesh.getNodeTime() + random( 1000000, 5000000 );
-//  }
-//
-//  // if the time is ripe, send everyone a message!
-//  if ( sendMessageTime != 0 && sendMessageTime < mesh.getNodeTime() ){
-//    String msg = "Hello from node ";
-//    msg += mesh.getNodeId();
-//    //mesh.sendBroadcast( msg );
-//    sendMessageTime = 0;
-//  }
-
 }

@@ -1,3 +1,12 @@
+/*=================================================================================== */
+/* meshquitto/mqtt_gateway.ino                                                        */
+/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
+/* Example implementation of a meshquitto mqtt gateway.                               */
+/*                                                                                    */
+/* Created by Lyudmil Vladimirov, Feb 2017                                            */
+/* More info: https://github.com/sglvladi/meshquitto                                  */
+/* ================================================================================== */
+
 #include <SoftwareSerial.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
@@ -6,41 +15,61 @@
 #include <SimpleList.h>
 #include <Crc16.h>
 
-#define TX D1
-#define RX D2
-#define TX_IRQ D4
-#define RX_IRQ D5
+// Message buffer size
+#define BUFFER_SIZE   30
 
-#define TX_FSM_ABORT 0
-#define TX_FSM_READY 1
-#define TX_FSM_ACK   2
+// Definition of TX/RX and TX/RX_IRQ (interrupt) pins
+#define TX            D1
+#define RX            D2
+#define TX_IRQ        D4
+#define RX_IRQ        D5
 
+//#define TX_FSM_ABORT 0
+//#define TX_FSM_READY 1
+//#define TX_FSM_ACK   2
+
+// Software Serial instantiation
 SoftwareSerial swSer(RX, TX, false, 255);
-// Update these with values suitable for your network.
 
-const char* ssid     = "some-SSID";
-const char* password = "some-PSK";
-const char* mqtt_server = "192.168.1.3";
-WiFiClient wificlient;
+// Network settings
+const char* ssid              = "some-SSID";
+const char* password          = "some-PSK";
+
+// MQTT connect settings
+const char* mqtt_server       = "some-MQTT-server";
+const char* mqtt_username     = "some-MQTT-username"; 
+const char* mqtt_password     = "some-MQTT-password";
+const char* mqtt_client_id    = "Mesquitto Gateway "+ ESP.getChipId();
+//const char* mqtt_will_topic   = ("/1/gateways/"+getMac()+"/disconnected").c_str();
+const char* mqtt_will_payload = "1";
+const int   mqtt_will_qos     = 1;
+const bool  mqtt_will_retain  = true; 
+
+// WiFi and MQTT client instantiation
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
-SimpleList<String> meshMessageBuffer;
-SimpleList<String> wifiMessageBuffer;
+
+// Buffers to store messages
+SimpleList<String> mqttMessageBuffer;         // Stores list of all messages queued to be sent to MQTT broker
+SimpleList<String> meshMessageBuffer;         // Stores list of all messages queued to be forwarded to Mesh gateway
+
+// Timestamp to store last time a message was sent to Mesh
 long lastMsg = 0;
-char msg[50];
-int value = 0;
-bool _sending = false;
-bool _receiving = false;
-bool _mqtt_update = false;
-String _topic;
-int mqtt_sent=0;
-String _swMessage;
 
-bool _empty_wifi_buffer_irq = false;
+// Global flags used for control
+bool _sending                 = false;                // Flag set when sending to Mesh
+bool _receiving               = false;              // Flag set when receiving from mesh
+bool _empty_mqtt_buffer_irq   = false;  // Flag set when 
 
-String TX_FSM_STATE = TX_FSM_READY;
-
+//String TX_FSM_STATE = TX_FSM_READY;
 //Ticker RX_Interrupt_Ticker;
+//void RX_check( void ){
+// if(digitalRead(RX_IRQ)==LOW){
+//   RX_Interrupt_Ticker.detach();
+//    receiveFromMesh();
+//  }
+//}
+
 /************************************************************************/
 /* Turns returned mac address into a readable string                    */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -80,15 +109,31 @@ String getMac()
 }
 /************************************************************************/
 
-void printHeap(){
+
+/************************************************************************/
+/* Prints available heap memory to Serial                               */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+void printHeap(){                                                       
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
   Serial.print("Free Heap: "); Serial.println(ESP.getFreeHeap());
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Prints the number of queued messages to Serial                       */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void printQueueSizes(){
-  Serial.print("WIFI queue: "); Serial.println(wifiMessageBuffer.size());
+  Serial.print("MQTT queue: "); Serial.println(mqttMessageBuffer.size());
   Serial.print("Mesh queue: "); Serial.println(meshMessageBuffer.size());
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Computes CRC16 of given data, then appends it to data and returns    */
+/* the resulting string                                                 */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String getCRCString(String data){
   Crc16 crc;
   byte * data_buf = (unsigned char*)data.c_str();
@@ -101,7 +146,14 @@ String getCRCString(String data){
   data += crc_value;
   return data;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/************************************************************************/
+/* Reads a string of data with it's CRC16 appended to the end, then     */
+/* computes a new CRC16 based on the raw data and returns true if       */
+/* the two CRC16 values match.                                          */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 bool checkCRC(String dataPlusCRC ){
   Crc16 crc;
   crc.clearCrc();
@@ -116,7 +168,12 @@ bool checkCRC(String dataPlusCRC ){
   }
   return false;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Reads topic and payload of MQTT message and formats it as JSON string */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String jsonMqttMessage(String topic, String payload){
   StaticJsonBuffer<500> jsonBuffer;
   JsonObject& rootFS2 = jsonBuffer.createObject();
@@ -126,7 +183,13 @@ String jsonMqttMessage(String topic, String payload){
   rootFS2.printTo(json_msg);
   return json_msg;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Reads topic and payload of MQTT message, formats it as JSON String    */
+/* and forwards it to Mesh gateway                                       */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void sendToMesh(String topic, String payload){
     _sending = true;
     StaticJsonBuffer<500> jsonBufferFS;
@@ -148,7 +211,12 @@ void sendToMesh(String topic, String payload){
     digitalWrite(TX_IRQ, HIGH);
     _sending = false;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Reads a JSON message and forwards it to Mesh gateway                  */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void sendToMesh(String json_msg){
     _sending = true;
     Serial.print("Forwarding message to Mesh GW: "); Serial.println(json_msg);
@@ -165,19 +233,20 @@ void sendToMesh(String json_msg){
     digitalWrite(TX_IRQ, HIGH);
     _sending = false;
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
-void RX_check( void ){
-  if(digitalRead(RX_IRQ)==LOW){
-    //RX_Interrupt_Ticker.detach();
-    receiveFromMesh();
-  }
-}
 
+/*************************************************************************/
+/* Function called when Mesh Interrupt (RX_IRQ) is triggered.            */
+/* Checks to see if max buffer limit is reached. If not, the received    */
+/* message is read and pushed to the MQTT buffer. Otherwise, it signals  */
+/* that buffer needs to be emptied and drops any messages until done.    */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void receiveFromMesh( void ){
-  if(wifiMessageBuffer.size()>=30){
-    _empty_wifi_buffer_irq = true;
+  if(mqttMessageBuffer.size()>=30){
+    _empty_mqtt_buffer_irq = true;
   }
-  if(!_empty_wifi_buffer_irq){
+  if(!_empty_mqtt_buffer_irq){
     _receiving = true;
     Serial.println("Mesh GW interrupt detected");
     printQueueSizes();
@@ -202,8 +271,7 @@ void receiveFromMesh( void ){
           }
           else{
             swMessage = swMessage.substring(0, swMessage.length()-4);
-            _mqtt_update = true;
-            wifiMessageBuffer.push_back(swMessage);
+            mqttMessageBuffer.push_back(swMessage);
             printQueueSizes();
             swMessage = "";
             continue;
@@ -220,11 +288,15 @@ void receiveFromMesh( void ){
     _receiving = false;
   }
   else{
-    Serial.println("Wifi buffer full!! Dropping data while it's emptying....");
+    Serial.println("MQTT buffer full!! Dropping data while it's emptying....");
   }
-//  RX_Interrupt_Ticker.attach(0.1, RX_check);
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* Connects to Wifi network with the given credentials                   */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void setup_wifi() {
   delay(10);
   // We start by connecting to a WiFi network
@@ -244,8 +316,15 @@ void setup_wifi() {
   Serial.println("IP address: ");
   Serial.println(WiFi.localIP());
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* MQTT callback function: Receives MQTT messages from the broker, then  */
+/* formats them as JSON Strings and pushes them onto the Mesh buffer     */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void callback(char* topic, byte* payload, unsigned int length) {
+  // Print some debugging
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
@@ -254,6 +333,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     value += (char)payload[i];
   }
   Serial.println(value);
+
+  // Extract all subtopics
   String topic_str = String(topic);
   int topic_length = topic_str.length();
   int subtopicNo = 0;
@@ -262,7 +343,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
       subtopicNo++;
     }
   }
-  //Serial.print("subotpicNo: "); Serial.println(subtopicNo);
   String subtopics[subtopicNo];
   bool topicParsed = false;
   int parserPos = 0;
@@ -279,26 +359,28 @@ void callback(char* topic, byte* payload, unsigned int length) {
     parserPos = endPos;
     i++;
   }
-  //for(int i=0; i<subtopicNo; i++){
-    //Serial.println(subtopics[i]);
-  //}
-  // 0:user_id, 1:"device", 2:GW_id (optional) 3:device_id, 4:"sensors", 5:sensor_id, 6: "input"/"output", 7: "value"/"min"/"max" etc.
+
+  // Format and push message to buffer
   String mesh_topic;
   for(int i=3; i<subtopicNo; i++){
     mesh_topic+="/";
     mesh_topic+=subtopics[i];
   }
   meshMessageBuffer.push_back(jsonMqttMessage(mesh_topic, value));
-  //sendToMesh(mesh_topic, value);
-  
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
+
+/*************************************************************************/
+/* MQTT reconnect funtion: Get called when a connection is lost or first */
+/* started.                                                              */
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 void reconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
     // Attempt to connect
-    if (client.connect("ESP8266MeshGateway1", "some-MQTT-account", "some-MQTT-password", String("/1/gateways/"+getMac()+"/disconnected").c_str(), 1, true, String("1").c_str())) {
+    if (client.connect(mqtt_client_id, mqtt_username, mqtt_password, ("/1/gateways/"+getMac()+"/disconnected").c_str(), mqtt_will_qos, mqtt_will_retain, mqtt_will_payload)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
       client.publish(String("/1/gateways/"+getMac()+"/disconnected").c_str(), String("0").c_str());
@@ -313,38 +395,47 @@ void reconnect() {
     }
   }
 }
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+
+
 void setup() {
+
+  // Start HW and SW Serials
   Serial.begin(115200);
+  swSer.begin(38400);
+
+  // Print initial debugging info
+  Serial.println("\nMeshquitto MQTT Gateway started!");
+
+  // Setup WiFi and MQTT connections
+  setup_wifi();
+  client.setServer(mqtt_server, 8883);
+  client.setCallback(callback);
+  reconnect();
+  client.loop();
+
+  // Set up TX and RX pins and interrupts
   pinMode(TX_IRQ, OUTPUT);
   digitalWrite(TX_IRQ, HIGH);
   pinMode(RX_IRQ, INPUT);
   attachInterrupt(RX_IRQ, receiveFromMesh, FALLING);
-  swSer.begin(38400);
-  setup_wifi();
-  client.setServer(mqtt_server, 8883);
-  client.setCallback(callback);
-  Serial.println("\nSoftware serial test started");
-
-//  for (char ch = ' '; ch <= 'z'; ch++) {
-//    swSer.write(ch);
-//  }
-//  swSer.println("");
-
 }
 
+
 void loop() {
+
+  // MQTT_loop
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
-  //Serial.println("Here");
-  if(_mqtt_update&&!_receiving){
-    //Serial.println(meshMessageBuffer.size());
-    while(wifiMessageBuffer.size()>0){
+
+  // Publish any available messages received from Mesh to MQTT
+  if(mqttMessageBuffer.size()>0&&!_receiving){
+    while(mqttMessageBuffer.size()>0){
       printHeap();
-      String swMessage = wifiMessageBuffer[0];
-      //Serial.println(swMessage);
-      wifiMessageBuffer.pop_front();
+      String swMessage = mqttMessageBuffer[0];
+      mqttMessageBuffer.pop_front();
       char contentBuffer[500];
       swMessage.toCharArray(contentBuffer,500);
       StaticJsonBuffer<500> jsonBuffer;
@@ -359,9 +450,10 @@ void loop() {
         printHeap();
       }
     }
-    _empty_wifi_buffer_irq = false;
-    _mqtt_update=false;
+    _empty_mqtt_buffer_irq = false;
   }
+
+  // Forward any available MQTT messages to Mesh network
   if(!_receiving){
      while(meshMessageBuffer.size()>0){
         String msg = meshMessageBuffer[0];
@@ -371,13 +463,5 @@ void loop() {
         sendToMesh(msg);
         printHeap();
      }
-     
   }
-  //while (swSer.available() > 0) {
-  //  Serial.write(swSer.read());
-  //}
- 
-  //while (Serial.available() > 0) {
-  //  swSer.write(Serial.read());
-  //}
 }
