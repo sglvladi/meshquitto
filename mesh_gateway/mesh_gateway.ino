@@ -669,29 +669,14 @@ void loop() {
   
   if(!_receiving&&(mqttMessageBuffer.size()>0)){
     // Ensure we only send up to 10 messages a second
-    // This avoids overloading of the MQTT server.
+    // This avoids overloading of the MQTT gateway, by allowing some 
+    // processing time between consecutive interrupts.
     if(millis()-lastMsg>100){
       //delay(100);
       String msg = mqttMessageBuffer[0];
       sendToMQTT(msg);
       mqttMessageBuffer.pop_front();
       lastMsg = millis();
-  //    switch(TX_FSM_STATE){
-  //      case(TX_FSM_READY):{
-  //        delay(50);
-  //        String msg = mqttMessageBuffer[0];
-  //        TX_FSM_STATE = TX_FSM_ACK;
-  //        sendToMQTT(msg);
-  //        break;
-  //      }
-  //      case(TX_FSM_ACK):{
-  //        if(digitalRead(RTX_INFO)==HIGH){
-  //          mqttMessageBuffer.pop_front();
-  //        }
-  //        TX_FSM_STATE = TX_FSM_READY;
-  //        break;
-  //      }
-  //    }
     }
   }
 }
