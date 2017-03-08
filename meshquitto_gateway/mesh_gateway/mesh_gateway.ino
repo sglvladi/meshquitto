@@ -59,8 +59,9 @@ unsigned long lastMsg = millis();
 SoftwareSerial swSer(RX, TX, false, 255);
 
 // Global flags used for control
-bool _sending   = false;
-bool _receiving = false;
+volatile bool _sending   = false;
+volatile bool _receiving = false;
+volatile bool _empty_mqtt_buffer_irq = false;
 
 //Ticker RX_Interrupt_Ticker;
 //void RX_check( void ){
@@ -660,7 +661,7 @@ void setup() {
   digitalWrite(TX_IRQ, HIGH);
   pinMode(RX_IRQ, INPUT);
   //RX_Interrupt_Ticker.attach(0.1, RX_check);
-  attachInterrupt(RX_IRQ, receiveFromWiFi, FALLING);
+  attachInterrupt(digitalPinToInterrupt(RX_IRQ), receiveFromWiFi, FALLING);
 }
 
 void loop() {

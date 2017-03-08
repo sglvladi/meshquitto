@@ -57,8 +57,8 @@ SimpleList<String> meshMessageBuffer;         // Stores list of all messages que
 long lastMsg = 0;
 
 // Global flags used for control
-bool _sending                 = false;                // Flag set when sending to Mesh
-bool _receiving               = false;              // Flag set when receiving from mesh
+volatile bool _sending                 = false;                // Flag set when sending to Mesh
+volatile bool _receiving               = false;              // Flag set when receiving from mesh
 bool _empty_mqtt_buffer_irq   = false;  // Flag set when 
 
 //String TX_FSM_STATE = TX_FSM_READY;
@@ -245,6 +245,7 @@ void sendToMesh(String json_msg){
 void receiveFromMesh( void ){
   if(mqttMessageBuffer.size()>=30){
     _empty_mqtt_buffer_irq = true;
+    detachInterrupt(digitalPinToInterrupt(RX_IRQ));
   }
   if(!_empty_mqtt_buffer_irq){
     _receiving = true;
@@ -418,7 +419,7 @@ void setup() {
   pinMode(TX_IRQ, OUTPUT);
   digitalWrite(TX_IRQ, HIGH);
   pinMode(RX_IRQ, INPUT);
-  attachInterrupt(RX_IRQ, receiveFromMesh, FALLING);
+  attachInterrupt(digitalPinToInterrupt(RX_IRQ), receiveFromMesh, FALLING);
 }
 
 
@@ -429,7 +430,7 @@ void loop() {
     reconnect();
   }
   client.loop();
-
+    Serial.print("looping...");
   // Publish any available messages received from Mesh to MQTT
   if(mqttMessageBuffer.size()>0&&!_receiving){
     while(mqttMessageBuffer.size()>0){
@@ -450,7 +451,10 @@ void loop() {
         printHeap();
       }
     }
-    _empty_mqtt_buffer_irq = false;
+    if(_empty_mqtt_buffer_irq){
+      attachInterrupt(digitalPinToInterrupt(RX_IRQ), receiveFromMesh, FALLING);
+      _empty_mqtt_buffer_irq = false;
+    }
   }
 
   // Forward any available MQTT messages to Mesh network

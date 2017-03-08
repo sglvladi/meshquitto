@@ -39,7 +39,7 @@
 #define RELAY_ID 0x07
 #define LIGHT_ID 0x08
 
-#define SEND_INTERVAL 1000
+#define SEND_INTERVAL 100
 
 painlessMesh  mesh;
 bool calc_delay = false;
@@ -280,9 +280,7 @@ void receivedCallback( uint32_t from, String &msg ) {
     }
     String topic_back = "/" + getMac()+ "/sensors/"+sensor_id+"/output/value";
     Serial.println("Sending.....");
-    //mesh.sendSingle( dest, response );
-    DynamicJsonBuffer jsonBufferFS;
-    JsonObject& rootFS2 = jsonBufferFS.createObject();
+    JsonObject& rootFS2 = jsonBuffer.createObject();
     rootFS2["topic"] = topic_back;
     rootFS2["payload"] = digitalRead(LED);
     String json_msg;
