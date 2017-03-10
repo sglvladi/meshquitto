@@ -1,5 +1,5 @@
 /*=================================================================================== */
-/* meshquitto/mqtt_gateway.ino                                                        */
+/* meshquitto_gateway/mqtt_gateway.ino                                                        */
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* Example implementation of a meshquitto mqtt gateway.                               */
 /*                                                                                    */
@@ -39,7 +39,7 @@ const char* password          = "some-PSK";
 const char* mqtt_server       = "some-MQTT-server";
 const char* mqtt_username     = "some-MQTT-username"; 
 const char* mqtt_password     = "some-MQTT-password";
-const char* mqtt_client_id    = "Mesquitto Gateway "+ ESP.getChipId();
+const char* mqtt_client_id    = "Mesquitto Gateway"; //String("Mesquitto Gateway "+ ESP.getChipId()).c_str();
 //const char* mqtt_will_topic   = ("/1/gateways/"+getMac()+"/disconnected").c_str();
 const char* mqtt_will_payload = "1";
 const int   mqtt_will_qos     = 1;
@@ -430,10 +430,10 @@ void loop() {
     reconnect();
   }
   client.loop();
-    Serial.print("looping...");
+  //  Serial.print("looping...");
   // Publish any available messages received from Mesh to MQTT
   if(mqttMessageBuffer.size()>0&&!_receiving){
-    while(mqttMessageBuffer.size()>0){
+    //while(mqttMessageBuffer.size()>0){
       printHeap();
       String swMessage = mqttMessageBuffer[0];
       mqttMessageBuffer.pop_front();
@@ -449,9 +449,9 @@ void loop() {
         Serial.println("==================================> ");
         client.publish((topic).c_str(), payload.c_str());
         printHeap();
-      }
+     // }
     }
-    if(_empty_mqtt_buffer_irq){
+    if(_empty_mqtt_buffer_irq&&mqttMessageBuffer.size()>0){
       attachInterrupt(digitalPinToInterrupt(RX_IRQ), receiveFromMesh, FALLING);
       _empty_mqtt_buffer_irq = false;
     }
