@@ -1,5 +1,5 @@
 /*=================================================================================== */
-/* meshquitto/mesh_gateway.ino                                                        */
+/* meshquitto_gateway/mesh_gateway.ino                                                        */
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* Example implementation of a meshquitto mesh gateway.                               */
 /*                                                                                    */
@@ -10,10 +10,11 @@
 #include <SoftwareSerial.h>
 #include <painlessMesh.h>
 #include <ArduinoJson.h>
-#include <HashMap.h> 
 #include <Ticker.h>
 #include <AES.h>
 #include <Crc16.h>
+#include "HashMap.h" 
+#include "SimpleList.h"
 
 // Mesh network details
 #define   MESH_SSID       "whateverYouLike"
