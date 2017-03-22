@@ -5,8 +5,8 @@ A simple Arduino project, which aims to provide a gateway between a mesh network
 <p align="center">
   <img src="https://github.com/sglvladi/meshquitto/blob/master/mesquitto_topology.jpg"/>
 </p>
-* The mesh network is created making use of the amazing painlessMesh library (see [here](https://gitlab.com/BlackEdder/painlessMesh/wikis/home)).
 
+* The mesh network is created making use of the amazing painlessMesh library (see [here](https://gitlab.com/BlackEdder/painlessMesh/wikis/home)).
 * The **Meshquitto gateway** is composed of 2 ESP8266 devices (tested on D1-mini).
   * The first of the two devices (**_MQTT gateway_**) connects to an available WiFi network and consequently establishes a connection to a MQTT broker. Any messages received from the MQTT broker are forwarded to the Mesh gateway and vice versa.
   * The second (**_Mesh gateway_**) connects to the mesh network. Any messages received from the MQTT gateway are forwarded to the Mesh network and vice versa.
