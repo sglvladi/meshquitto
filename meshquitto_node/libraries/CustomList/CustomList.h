@@ -1,7 +1,9 @@
-// SimpleList.h
+// CustomList.h
 
-#ifndef _SIMPLELIST_h
-#define _SIMPLELIST_h
+#ifndef _CUSTOMLIST_h
+#define _CUSTOMLIST_h
+
+#include <list>
 
 #if defined(ARDUINO) && ARDUINO >= 100
 #include "Arduino.h"
@@ -13,13 +15,13 @@
 #define NULL 0
 #endif
 
-template<typename T>
-class SimpleList
+template <typename T>
+class CustomList
 {
-public:
-    typedef T* iterator;
+  public:
+    typedef T *iterator;
 
-    SimpleList()
+    CustomList()
     {
         _internalArray = NULL;
         _endPosition = 0;
@@ -27,7 +29,7 @@ public:
         _preAllocBlocks = 0;
     }
 
-    ~SimpleList()
+    ~CustomList()
     {
         delete[] _internalArray;
         _internalArray = NULL;
@@ -36,7 +38,7 @@ public:
         _preAllocBlocks = 0;
     }
 
-    SimpleList(const SimpleList& from)
+    CustomList(const CustomList &from)
     {
         _endPosition = from._endPosition;
         _allocBlocks = from._allocBlocks;
@@ -48,7 +50,7 @@ public:
             _internalArray[i] = from._internalArray[i];
     }
 
-    SimpleList& operator=(const SimpleList& from)
+    CustomList &operator=(const CustomList &from)
     {
         if (this != &from)
         {
@@ -70,35 +72,52 @@ public:
 
         return *this;
     }
-	
-	void sort() 
-	{
-		bool swapped = true;
-		int j = 0;
-		int tmp;
-		while (swapped) {
-			swapped = false;
-			j++;
-			for (int i = 0; i < _endPosition - j; i++) {
-				if (_internalArray[i] >_internalArray[i + 1]) {
-					tmp = _internalArray[i];
-					_internalArray[i] = _internalArray[i + 1];
-					_internalArray[i + 1] = tmp;
-					swapped = true;
-				}
-			}
-		}
-	}
-	
-	int indexOf(T item)
-	{
-		for (int i = 0; i < _endPosition; i++) {
-			if (_internalArray[i] == item) {
-				return i;
-			}
-		}
-		return -1;
-	}
+
+    CustomList<T> &operator=(std::list<T> from)
+    {
+        clear();
+        while (from.size() != 0)
+        {
+            push_back(from.front());
+            from.pop_front();
+        }
+
+        return *this;
+    }
+
+    void sort()
+    {
+        bool swapped = true;
+        int j = 0;
+        int tmp;
+        while (swapped)
+        {
+            swapped = false;
+            j++;
+            for (int i = 0; i < _endPosition - j; i++)
+            {
+                if (_internalArray[i] > _internalArray[i + 1])
+                {
+                    tmp = _internalArray[i];
+                    _internalArray[i] = _internalArray[i + 1];
+                    _internalArray[i + 1] = tmp;
+                    swapped = true;
+                }
+            }
+        }
+    }
+
+    int indexOf(T item)
+    {
+        for (int i = 0; i < _endPosition; i++)
+        {
+            if (_internalArray[i] == item)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
 
     void push_back(T item)
     {
@@ -122,22 +141,21 @@ public:
         _internalArray[0] = item;
         ++_endPosition;
     }
-	
-	void remove(int index)
+
+    void remove(int index)
     {
-	   Serial.println(_endPosition);
-       if (_endPosition == 0)
+        Serial.println(_endPosition);
+        if (_endPosition == 0)
             return;
 
         --_endPosition;
 
         //if (_allocBlocks > _preAllocBlocks)
-		for (int i = index; i < _endPosition; ++i)
-			_internalArray[i] = _internalArray[i + 1];
+        for (int i = index; i < _endPosition; ++i)
+            _internalArray[i] = _internalArray[i + 1];
         DeAllocOneBlock(false);
-		Serial.println(_endPosition);
+        Serial.println(_endPosition);
     }
-	
 
     void pop_back()
     {
@@ -181,7 +199,7 @@ public:
         if (_allocBlocks > _preAllocBlocks)
         {
             --_allocBlocks;
-            T* newArray = new T[_allocBlocks];
+            T *newArray = new T[_allocBlocks];
 
             for (int i = 0; i < _endPosition; ++i)
             {
@@ -211,7 +229,7 @@ public:
         _allocBlocks = size;
         _preAllocBlocks = size;
 
-        T* newArray = new T[_allocBlocks];
+        T *newArray = new T[_allocBlocks];
 
         for (int i = 0; i < _endPosition; ++i)
             newArray[i] = _internalArray[i];
@@ -226,7 +244,7 @@ public:
         {
             _allocBlocks = _preAllocBlocks;
 
-            T* newArray = NULL;
+            T *newArray = NULL;
 
             if (_allocBlocks > 0)
                 newArray = new T[_allocBlocks];
@@ -243,7 +261,7 @@ public:
         _preAllocBlocks = _endPosition;
         _allocBlocks = _endPosition;
 
-        T* newArray = NULL;
+        T *newArray = NULL;
 
         if (_allocBlocks > 0)
             newArray = new T[_allocBlocks];
@@ -254,11 +272,12 @@ public:
         delete[] _internalArray;
         _internalArray = newArray;
     }
-	
-	T& operator[] (int x) {
+
+    T &operator[](int x)
+    {
         return _internalArray[x];
     }
-	  
+
     inline iterator begin() { return _internalArray; }
     inline iterator end() { return _internalArray + _endPosition; }
 
@@ -266,12 +285,11 @@ public:
     inline unsigned int size() { return _endPosition; }
     inline unsigned int capacity() { return _allocBlocks; }
 
-private:
-
+  private:
     void AllocOneBlock(bool shiftItems)
     {
         ++_allocBlocks;
-        T* newArray = new T[_allocBlocks];
+        T *newArray = new T[_allocBlocks];
 
         for (int i = 0; i < _endPosition; ++i)
             newArray[shiftItems ? (i + 1) : i] = _internalArray[i];
@@ -291,7 +309,7 @@ private:
             return;
         }
 
-        T* newArray = new T[_allocBlocks];
+        T *newArray = new T[_allocBlocks];
 
         for (int i = 0; i < _endPosition; ++i)
             newArray[i] = _internalArray[shiftItems ? (i + 1) : i];
@@ -300,9 +318,8 @@ private:
         _internalArray = newArray;
     }
 
-private:
-
-    T* _internalArray;
+  private:
+    T *_internalArray;
     int _endPosition;
     int _allocBlocks;
     int _preAllocBlocks;

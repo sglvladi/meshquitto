@@ -1,4 +1,4 @@
-/*=================================================================================== */
+  /*=================================================================================== */
 /* meshquitto_gateway/mesh_gateway.ino                                                        */
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* Example implementation of a meshquitto mesh gateway.                               */
@@ -14,7 +14,15 @@
 #include <AES.h>
 #include <Crc16.h>
 #include "HashMap.h" 
-#include "SimpleList.h"
+#include "./libraries/CustomList/CustomList.h"
+
+struct CUSTOM_MESSAGE {   // Declare MESSAGE struct type  
+    String TYPE;   // Declare member types  
+    uint8_t SENDER_ID;
+    uint8_t RECEIVER_ID;
+    float PAYLOAD;  
+    char RSSI;  
+};
 
 // Mesh network details
 #define   MESH_SSID       "whateverYouLike"
@@ -40,15 +48,15 @@
 painlessMesh  mesh;
 
 // Storage containers and buffers
-SimpleList<uint32_t> nodes;                   // Stores list of all nodes
-SimpleList<uint32_t> lostConnections;         // Stores list of all lost connections
-SimpleList<unsigned long> lostConnTimeouts;   // Stores list of all lost connection timeouts (keep alive = 5 sec)
-SimpleList<String> mqttMessageBuffer;         // Stores list of all messages queued to be forwarded to MQTT gateway
-SimpleList<String> meshMessageBuffer;         // Stores list of all messages queued to be sent to Mesh network
-
+CustomList<uint32_t> nodes;                   // Stores list of all nodes
+CustomList<uint32_t> lostConnections;         // Stores list of all lost connections
+CustomList<unsigned long> lostConnTimeouts;   // Stores list of all lost connection timeouts (keep alive = 5 sec)
+CustomList<String> mqttMessageBuffer;         // Stores list of all messages queued to be forwarded to MQTT gateway
+CustomList<String> meshMessageBuffer;         // Stores list of all messages queued to be sent to Mesh network
+CustomList<CUSTOM_MESSAGE> customMessageBuffer;
 // {NodeId => MAC} Map 
 CreateHashMap(macAddressMap, int, String, 30);
-
+CreateHashMap(custAddressMap, int, CUSTOM_MESSAGE, 30);
 // AES Encryption parameters
 const String                  AES_KEY   = "0123456789010123";
 const unsigned long long int  AES_IV    = 36753562;
@@ -218,9 +226,9 @@ String AES_decrypt(String cipher, String key) {
 
 
 /*****************************************************************************/
-/* Computes and returns the set difference between two SimpleList<uint32_t>  */
+/* Computes and returns the set difference between two CustomList<uint32_t>  */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-SimpleList<uint32_t> getDifference(SimpleList<uint32_t> arr1, SimpleList<uint32_t> arr2){
+CustomList<uint32_t> getDifference(CustomList<uint32_t> arr1, CustomList<uint32_t> arr2){
   if(arr1.size()==0){
     return arr2;
   }
@@ -229,7 +237,7 @@ SimpleList<uint32_t> getDifference(SimpleList<uint32_t> arr1, SimpleList<uint32_
   }
   int m = arr1.size();
   int n = arr2.size();
-  SimpleList<uint32_t> diff;
+  CustomList<uint32_t> diff;
   int i = 0, j = 0;
   while (i < m && j < n)
   {
@@ -256,13 +264,13 @@ SimpleList<uint32_t> getDifference(SimpleList<uint32_t> arr1, SimpleList<uint32_
 
 
 /*******************************************************************************/
-/* Computes and returns the set intersection between two SimpleList<uint32_t>  */
+/* Computes and returns the set intersection between two CustomList<uint32_t>  */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-SimpleList<uint32_t> getIntersection(SimpleList<uint32_t> arr1, SimpleList<uint32_t> arr2){
+CustomList<uint32_t> getIntersection(CustomList<uint32_t> arr1, CustomList<uint32_t> arr2){
   
   int m = arr1.size();
   int n = arr2.size();
-  SimpleList<uint32_t> intersect;
+  CustomList<uint32_t> intersect;
   int i = 0, j = 0;
   while (i < m && j < n)
   {
@@ -285,20 +293,20 @@ SimpleList<uint32_t> getIntersection(SimpleList<uint32_t> arr1, SimpleList<uint3
 /* Given two lists, before and after a new scan, computes and returns all */
 /* nodes that have disconnected since the last scan.                      */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-SimpleList<uint32_t> getLostConnections(SimpleList<uint32_t> nodes, SimpleList<uint32_t> old_nodes){
+CustomList<uint32_t> getLostConnections(CustomList<uint32_t> nodes, CustomList<uint32_t> old_nodes){
   if(nodes.size()==0){
     return old_nodes;
   }
-  SimpleList<uint32_t> diff = getDifference(old_nodes, nodes);
+  CustomList<uint32_t> diff = getDifference(old_nodes, nodes);
   //Serial.println(diff.size());
   Serial.print("Diff: "); 
-  SimpleList<uint32_t>::iterator node = diff.begin();
+  CustomList<uint32_t>::iterator node = diff.begin();
     while (node != diff.end()) {
         Serial.printf(" %u", *node);
         node++;
     }
   Serial.println();
-  SimpleList<uint32_t> lostCons = getIntersection(diff, old_nodes);
+  CustomList<uint32_t> lostCons = getIntersection(diff, old_nodes);
   return lostCons;
   
 }
@@ -309,10 +317,10 @@ SimpleList<uint32_t> getLostConnections(SimpleList<uint32_t> nodes, SimpleList<u
 /* Given two lists, before and after a new scan, computes and returns all */
 /* newly connected nodes.                                                 */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-SimpleList<uint32_t> getNewConnections(SimpleList<uint32_t> nodes, SimpleList<uint32_t> old_nodes){
+CustomList<uint32_t> getNewConnections(CustomList<uint32_t> nodes, CustomList<uint32_t> old_nodes){
   
-  SimpleList<uint32_t> diff = getDifference(old_nodes, nodes);
-  SimpleList<uint32_t> newCons = getIntersection(diff, nodes);
+  CustomList<uint32_t> diff = getDifference(old_nodes, nodes);
+  CustomList<uint32_t> newCons = getIntersection(diff, nodes);
   return newCons;
   
 }
@@ -327,7 +335,7 @@ SimpleList<uint32_t> getNewConnections(SimpleList<uint32_t> nodes, SimpleList<ui
 void updateLostConnections(){
   if(lostConnections.size()>0){
     //Serial.println("Updating Lost Connections");
-    SimpleList<uint32_t>::iterator node = lostConnections.begin();
+    CustomList<uint32_t>::iterator node = lostConnections.begin();
    // Serial.println(lostConnections.size());
     int i;
     while (node != lostConnections.end()) 
@@ -343,7 +351,7 @@ void updateLostConnections(){
           else{
             Serial.print("Dropping messages!!!");
           }
-          sendToMQTT(topic, payload);
+          //sendToMQTT(topic, payload);
           macAddressMap.remove(lostConnections[i]);
           lostConnections.remove(i);
           lostConnTimeouts.remove(i);
@@ -410,11 +418,11 @@ void receivedCallback( uint32_t from, String &msg ) {
 void changedConnectionCallback() {
  
     Serial.printf("Changed connections %s\n", mesh.subConnectionJson().c_str());
-    SimpleList<uint32_t> old_nodes = nodes;
+    CustomList<uint32_t> old_nodes = nodes;
     
     // Print old available connections to nodes
     Serial.printf("Old Connection list:");
-    SimpleList<uint32_t>::iterator node = old_nodes.begin();
+    CustomList<uint32_t>::iterator node = old_nodes.begin();
     while (node != old_nodes.end()) {
         Serial.printf(" %u", *node);
         node++;
@@ -434,7 +442,7 @@ void changedConnectionCallback() {
     Serial.println();
 
     // Get and print lost connections to nodes
-    SimpleList<uint32_t> lostConns = getLostConnections(nodes, old_nodes);
+    CustomList<uint32_t> lostConns = getLostConnections(nodes, old_nodes);
     Serial.printf("Lost Connections: ");
     node = lostConns.begin();
     while (node != lostConns.end()) {
@@ -457,11 +465,11 @@ void changedConnectionCallback() {
     }
     Serial.println();
     // Free up the memory
-    //lostConns.~SimpleList<uint32_t>();
+    //lostConns.~CustomList<uint32_t>();
     printHeap();
     
     // Get and print new lost connections to nodes
-    SimpleList<uint32_t> newConns = getNewConnections(nodes, old_nodes);
+    CustomList<uint32_t> newConns = getNewConnections(nodes, old_nodes);
     Serial.printf("New Connections: ");
     node = newConns.begin();
     while (node != newConns.end()) {
@@ -481,14 +489,14 @@ void changedConnectionCallback() {
           lostConnections.remove(index);
           lostConnTimeouts.remove(index);
           Serial.print("Remaining: ");
-          SimpleList<uint32_t>::iterator lost_node = lostConnections.begin();
+          CustomList<uint32_t>::iterator lost_node = lostConnections.begin();
           while (lost_node != lostConnections.end()) {
             Serial.printf(" %u", *lost_node);
             lost_node++;
           }
           Serial.println();
           Serial.print("        : ");
-          SimpleList<unsigned long>::iterator lost_timeout = lostConnTimeouts.begin();
+          CustomList<unsigned long>::iterator lost_timeout = lostConnTimeouts.begin();
           while (lost_timeout != lostConnTimeouts.end()) {
             Serial.printf(" %u", millis()-*lost_timeout);
             lost_timeout++;
@@ -500,7 +508,7 @@ void changedConnectionCallback() {
     }
     Serial.println();
     // Free up the memory
-    //newConns.~SimpleList<uint32_t>();
+    //newConns.~CustomList<uint32_t>();
 }
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
@@ -533,12 +541,13 @@ void sendToMQTT(String topic, String payload){
     rootFS2["payload"] = payload;
     String json_msg;
     rootFS2.printTo(json_msg);
-    for (int i = 0; i < json_msg.length(); i++) {
+    String crc_msg = getCRCString(json_msg);
+    for (int i = 0; i < crc_msg.length(); i++) {
       Serial.print(".");
-      swSer.write(json_msg[i]);
+      swSer.write(crc_msg[i]);
     }
     swSer.write("\\");
-    swSer.flush();
+    //swSer.flush();
     Serial.println("DONE");
     Serial.print("TOPIC: "); Serial.println(topic);
     Serial.print("VALUE: "); Serial.println(payload);

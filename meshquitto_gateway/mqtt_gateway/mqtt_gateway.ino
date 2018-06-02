@@ -12,7 +12,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <Ticker.h>
-#include "SimpleList.h"
+#include "./libraries/CustomList/CustomList.h"
 #include <Crc16.h>
 
 // Message buffer size
@@ -32,13 +32,22 @@
 SoftwareSerial swSer(RX, TX, false, 255);
 
 // Network settings
-const char* ssid              = "some-SSID";
-const char* password          = "some-PSK";
+const char* ssid              = "VM146928-2G";
+const char* password          = "gbwnhajc";
 
 // MQTT connect settings
-const char* mqtt_server       = "some-MQTT-server";
-const char* mqtt_username     = "some-MQTT-username"; 
-const char* mqtt_password     = "some-MQTT-password";
+const char* mqtt_server       = "192.168.1.3";
+const char* mqtt_username     = "device"; 
+const char* mqtt_password     = "didmsiskf0wdo";
+
+//// Network settings
+//const char* ssid              = "some-SSID";
+//const char* password          = "some-PSK";
+//
+//// MQTT connect settings
+//const char* mqtt_server       = "some-MQTT-server";
+//const char* mqtt_username     = "some-MQTT-username"; 
+//const char* mqtt_password     = "some-MQTT-password";
 const char* mqtt_client_id    = "Mesquitto Gateway"; //String("Mesquitto Gateway "+ ESP.getChipId()).c_str();
 //const char* mqtt_will_topic   = ("/1/gateways/"+getMac()+"/disconnected").c_str();
 const char* mqtt_will_payload = "1";
@@ -50,8 +59,8 @@ WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
 // Buffers to store messages
-SimpleList<String> mqttMessageBuffer;         // Stores list of all messages queued to be sent to MQTT broker
-SimpleList<String> meshMessageBuffer;         // Stores list of all messages queued to be forwarded to Mesh gateway
+CustomList<String> mqttMessageBuffer;         // Stores list of all messages queued to be sent to MQTT broker
+CustomList<String> meshMessageBuffer;         // Stores list of all messages queued to be forwarded to Mesh gateway
 
 // Timestamp to store last time a message was sent to Mesh
 long lastMsg = 0;
@@ -249,17 +258,17 @@ void receiveFromMesh( void ){
   }
   if(!_empty_mqtt_buffer_irq){
     _receiving = true;
-    Serial.println("Mesh GW interrupt detected");
+    Serial.println("\n\nMesh GW interrupt detected");
     printQueueSizes();
     bool received = false;
     String swMessage;
     //while(digitalRead(RX_IRQ)==LOW){
       while (swSer.available() > 0) {
         char swChar = swSer.read();
-        Serial.print(swChar);
+        //Serial.print(swChar);
         if((char)swChar == '\\'){
           received = true;
-          Serial.println("\n==================================> ");
+          Serial.println("==================================> ");
           Serial.println("Received message from Mesh gateway: ");
           Serial.println("==================================> ");
           Serial.println(swMessage);
