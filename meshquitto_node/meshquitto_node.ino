@@ -6,7 +6,7 @@
 /* This example assumes that a DS18B20 temp sensor is plugged in on port D4 and a LED */
 /* on port D1. For exact wiring refer to mesquitto_node.png                           */
 /*                                                                                    */
-/* Created by Lyudmil Vladimirov, Feb 2017                                            */
+/* Created by Lyudmil Vladimirov, Feb 2017 (Last update: Aug 2020)                                              */
 /* More info: https://github.com/sglvladi/meshquitto                                  */
 /* ================================================================================== */
 
@@ -14,7 +14,7 @@
 #include<ESP8266WiFi.h>
 #include <painlessMesh.h>
 #include <AES.h>
-#include "HashMap.h" 
+#include "./libraries/HashMap/HashMap.h" 
 #include "./libraries/CustomList/CustomList.h"
 
 // Define GPIO pins
@@ -111,12 +111,11 @@ int readTemp(int port)
     Serial.print(temperature); Serial.println(" *C"); 
     char temp[] = "";
     dtostrf(temperature,1, 2, temp);
-    DynamicJsonBuffer jsonBufferFS;
-    JsonObject& rootFS2 = jsonBufferFS.createObject();
-    rootFS2["topic"] = TEMP_TOPIC;
-    rootFS2["payload"] = String(temperature);
+    DynamicJsonDocument jsonDoc(1024);
+    jsonDoc["topic"] = TEMP_TOPIC;
+    jsonDoc["payload"] = String(temperature);
     String json_msg;
-    rootFS2.printTo(json_msg);
+    serializeJson(jsonDoc, json_msg);
     Serial.println("Sending.....");
     uint32_t dest = GW_ID;
     String encrypted_msg = AES_encrypt(json_msg, AES_KEY);
@@ -221,12 +220,10 @@ void receivedCallback( uint32_t from, String &msg ) {
   String decrypted_msg = AES_decrypt(msg, AES_KEY);
   Serial.printf("startHere: Received from %d msg=",from); Serial.println(decrypted_msg);
   String response = "Message received! ID: ";
-  char contentBuffer[500];
-  decrypted_msg .toCharArray(contentBuffer,500);
-  StaticJsonBuffer<500> jsonBuffer;
-  JsonObject& rootFS2 = jsonBuffer.parseObject(contentBuffer);
-  String topic = rootFS2["topic"];
-  String payload = rootFS2["payload"];
+  StaticJsonDocument<500> jsonDoc;
+  deserializeJson(jsonDoc, decrypted_msg);
+  String topic = jsonDoc["topic"];
+  String payload = jsonDoc["payload"];
   Serial.println("Message arrived...");
   Serial.println("Topic: "+topic);
   Serial.println("Payload: "+payload);
@@ -396,5 +393,4 @@ void loop() {
   mesh.update();
   readTemp(D4);
 }
-
 

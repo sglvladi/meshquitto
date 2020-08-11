@@ -3,7 +3,7 @@
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* Example implementation of a meshquitto mesh gateway.                               */
 /*                                                                                    */
-/* Created by Lyudmil Vladimirov, Feb 2017                                            */
+/* Created by Lyudmil Vladimirov, Feb 2017 (Last update: Aug 2020)                                         */
 /* More info: https://github.com/sglvladi/meshquitto                                  */
 /* ================================================================================== */
 
@@ -13,7 +13,7 @@
 #include <Ticker.h>
 #include <AES.h>
 #include <Crc16.h>
-#include "HashMap.h" 
+#include "./libraries/HashMap/HashMap.h" 
 #include "./libraries/CustomList/CustomList.h"
 
 struct CUSTOM_MESSAGE {   // Declare MESSAGE struct type  
@@ -65,7 +65,7 @@ const int                     AES_BITS  = 256;
 // Timestamp to store last time a message was sent to Mesh
 unsigned long lastMsg = millis();
 
-SoftwareSerial swSer(RX, TX, false, 255);
+SoftwareSerial swSer(RX, TX, false);
 
 // Global flags used for control
 volatile bool _sending   = false;
@@ -145,12 +145,11 @@ bool checkCRC(String dataPlusCRC ){
 /* Reads topic and payload of MQTT message and formats it as JSON string */
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String jsonMqttMessage(String topic, String payload){
-  StaticJsonBuffer<500> jsonBuffer;
-  JsonObject& rootFS2 = jsonBuffer.createObject();
-  rootFS2["topic"] = topic;
-  rootFS2["payload"] = payload;
+  StaticJsonDocument<500> jsonDoc;
+  jsonDoc["topic"] = topic;
+  jsonDoc["payload"] = payload;
   String json_msg;
-  rootFS2.printTo(json_msg);
+  serializeJson(jsonDoc, json_msg);
   return json_msg;
 }
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -375,12 +374,10 @@ void updateLostConnections(){
 void receivedCallback( uint32_t from, String &msg ) {
   Serial.printf("startHere: Received from %d msg=%s\n", from, msg.c_str());
   msg = AES_decrypt(msg, AES_KEY);
-  char contentBuffer[500];
-  msg.toCharArray(contentBuffer,500);
-  StaticJsonBuffer<500> jsonBuffer;
-  JsonObject& rootFS2 = jsonBuffer.parseObject(contentBuffer);
-  String topic = rootFS2["topic"].as<String>();
-  String payload = rootFS2["payload"].as<String>();
+  StaticJsonDocument<500> jsonDoc;
+  deserializeJson(jsonDoc, msg);
+  String topic = jsonDoc["topic"].as<String>();
+  String payload = jsonDoc["payload"].as<String>();
   int endPos = topic.indexOf("/");
   String macAddress = topic.substring(0, endPos);
 
@@ -535,12 +532,11 @@ void delayReceivedCallback(uint32_t from, int32_t delay) {
 void sendToMQTT(String topic, String payload){
     _sending = true;
     Serial.print("Forwarding message to WiFi GW");
-    DynamicJsonBuffer jsonBufferFS;
-    JsonObject& rootFS2 = jsonBufferFS.createObject();
-    rootFS2["topic"] = topic;
-    rootFS2["payload"] = payload;
+    DynamicJsonDocument jsonDoc(1024);
+    jsonDoc["topic"] = topic;
+    jsonDoc["payload"] = payload;
     String json_msg;
-    rootFS2.printTo(json_msg);
+    serializeJson(jsonDoc, json_msg);
     String crc_msg = getCRCString(json_msg);
     for (int i = 0; i < crc_msg.length(); i++) {
       Serial.print(".");
@@ -619,11 +615,9 @@ void receiveFromWiFi( void ){
       Serial.print("Received message from WiFi gateway: ");
       swMessage = swMessage.substring(swMessage.indexOf("{"));//replace("ÿ","");
       Serial.println(swMessage);
-      char contentBuffer[500];
-      swMessage.toCharArray(contentBuffer,500);
-      StaticJsonBuffer<500> jsonBuffer;
-      JsonObject& rootFS2 = jsonBuffer.parseObject(contentBuffer);
-      String topic = rootFS2["topic"].as<String>();
+      StaticJsonDocument<500> jsonDoc;
+      deserializeJson(jsonDoc, swMessage);
+      String topic = jsonDoc["topic"].as<String>();
       int endPos = topic.indexOf("/",2);
       String macAddress = topic.substring(1, endPos);
       if(macAddressMap.indexOfValue(macAddress)!=-1){

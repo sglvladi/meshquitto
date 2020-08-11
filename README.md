@@ -6,11 +6,10 @@ A simple Arduino project, which aims to provide a gateway between a mesh network
   <img src="https://github.com/sglvladi/meshquitto/blob/master/mesquitto_topology.jpg"/>
 </p>
 
-* The mesh network is created making use of the amazing painlessMesh library (see [here](https://gitlab.com/BlackEdder/painlessMesh/wikis/home)).
+* The mesh network is created by making use of the amazing painlessMesh library (see [here](https://gitlab.com/BlackEdder/painlessMesh/wikis/home)).
 * The **Meshquitto gateway** is composed of 2 ESP8266 devices (tested on D1-mini).
   * The first of the two devices (**_MQTT gateway_**) connects to an available WiFi network and consequently establishes a connection to a MQTT broker. Any messages received from the MQTT broker are forwarded to the Mesh gateway and vice versa.
   * The second (**_Mesh gateway_**) connects to the mesh network. Any messages received from the MQTT gateway are forwarded to the Mesh network and vice versa.
-  * Communication between the MQTT gateway and Mesh gateway ESP8266 devices is achieved through Software serial (see [here](https://github.com/plerup/espsoftwareserial) for library).
   * Since Software serial does not provide parity check functionality, CRC16 (see [here](https://github.com/vinmenn/Crc16) for library) is used to detect transmission errors. (**NOTE**: Retransmition is not currently implemented, thus corrupted messages are simply dropped).
 * The topic structure of messages is shown in the image above:
   * \<MQTT_gateway_subtopics\> form the first (few) subtopic(s) of the MQTT topic, which are used solely for subscription and publishing identification of the gateway with the MQTT broker. 

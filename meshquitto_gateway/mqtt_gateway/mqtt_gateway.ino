@@ -3,7 +3,7 @@
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 /* Example implementation of a meshquitto mqtt gateway.                               */
 /*                                                                                    */
-/* Created by Lyudmil Vladimirov, Feb 2017                                            */
+/* Created by Lyudmil Vladimirov, Feb 2017 (Last update: Aug 2020)                                              */
 /* More info: https://github.com/sglvladi/meshquitto                                  */
 /* ================================================================================== */
 
@@ -29,7 +29,7 @@
 //#define TX_FSM_ACK   2
 
 // Software Serial instantiation
-SoftwareSerial swSer(RX, TX, false, 255);
+SoftwareSerial swSer(RX, TX, false);
 
 // Network settings
 const char *ssid = "some-SSID";
@@ -181,12 +181,11 @@ bool checkCRC(String dataPlusCRC)
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 String jsonMqttMessage(String topic, String payload)
 {
-  StaticJsonBuffer<500> jsonBuffer;
-  JsonObject &rootFS2 = jsonBuffer.createObject();
-  rootFS2["topic"] = topic;
-  rootFS2["payload"] = payload;
+  StaticJsonDocument<500> jsonDoc;  
+  jsonDoc["topic"] = topic;
+  jsonDoc["payload"] = payload;
   String json_msg;
-  rootFS2.printTo(json_msg);
+  serializeJson(jsonDoc, json_msg);
   return json_msg;
 }
 /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -198,12 +197,11 @@ String jsonMqttMessage(String topic, String payload)
 void sendToMesh(String topic, String payload)
 {
   _sending = true;
-  StaticJsonBuffer<500> jsonBufferFS;
-  JsonObject &rootFS2 = jsonBufferFS.createObject();
-  rootFS2["topic"] = topic;
-  rootFS2["payload"] = payload;
+  StaticJsonDocument<500> jsonDoc;
+  jsonDoc["topic"] = topic;
+  jsonDoc["payload"] = payload;
   String json_msg;
-  rootFS2.printTo(json_msg);
+  serializeJson(jsonDoc, json_msg);
   Serial.print("Forwarding message to Mesh GW");
   for (int i = 0; i < json_msg.length(); i++)
   {
@@ -468,14 +466,13 @@ void loop()
     printHeap();
     String swMessage = mqttMessageBuffer[0];
     mqttMessageBuffer.pop_front();
-    char contentBuffer[500];
-    swMessage.toCharArray(contentBuffer, 500);
-    StaticJsonBuffer<500> jsonBuffer;
-    JsonObject &rootFS2 = jsonBuffer.parseObject(contentBuffer);
-    if (rootFS2["topic"].as<String>() != "" && rootFS2["payload"].as<String>() != "")
+    StaticJsonDocument<500> jsonDoc;
+    deserializeJson(jsonDoc, swMessage);
+    String topic = jsonDoc["topic"].as<String>();
+    String payload = jsonDoc["payload"].as<String>();
+    if (topic != "" && payload != "")
     {
-      String topic = "/1/gateways/" + getMac() + "/" + rootFS2["topic"].as<String>();
-      String payload = rootFS2["payload"].as<String>();
+      topic = "/1/gateways/" + getMac() + "/" + topic;
       Serial.print("TOPIC: ");
       Serial.println(topic);
       Serial.print("VALUE: ");
